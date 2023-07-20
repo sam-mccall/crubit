@@ -20,9 +20,6 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/RecursiveASTVisitor.h"
-#include "clang/Frontend/CompilerInstance.h"
-#include "clang/Frontend/FrontendAction.h"
-#include "clang/Frontend/FrontendActions.h"
 #include "clang/Index/USRGeneration.h"
 #include "clang/Tooling/ArgumentsAdjusters.h"
 #include "clang/Tooling/Execution.h"
@@ -128,38 +125,27 @@ bool isTrivial(const Inference::SlotInference &I) {
   return false;
 }
 
-class Action : public SyntaxOnlyAction {
-  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &,
-                                                 llvm::StringRef) override {
-    class Consumer : public ASTConsumer {
-      void HandleTranslationUnit(ASTContext &Ctx) override {
-        llvm::errs() << "Running inference...";
-        auto Results = inferTU(Ctx);
-        if (!IncludeTrivial)
-          llvm::erase_if(Results, [](Inference &I) {
-            llvm::erase_if(*I.mutable_slot_inference(), isTrivial);
-            return I.slot_inference_size() == 0;
-          });
-        if (PrintProtos)
-          for (const auto &I : Results) llvm::outs() << I.DebugString() << "\n";
-        if (Diagnostics)
-          DiagnosticPrinter(Results, Ctx.getDiagnostics()).TraverseAST(Ctx);
-      }
-    };
-    return std::make_unique<Consumer>();
-  }
-};
+void run(ASTContext &Ctx) override {
+  llvm::errs() << "Running inference...";
+  auto Results = inferTU(Ctx);
+  if (!IncludeTrivial)
+    llvm::erase_if(Results, [](Inference &I) {
+      llvm::erase_if(*I.mutable_slot_inference(), isTrivial);
+      return I.slot_inference_size() == 0;
+    });
+  if (PrintProtos)
+    for (const auto &I : Results) llvm::outs() << I.DebugString() << "\n";
+  if (Diagnostics)
+    DiagnosticPrinter(Results, Ctx.getDiagnostics()).TraverseAST(Ctx);
+}
 
 }  // namespace
 }  // namespace clang::tidy::nullability
 
 int main(int argc, const char **argv) {
   using namespace clang::tooling;
-  auto Exec = createExecutorFromCommandLineArgs(argc, argv, Opts);
-  QCHECK(Exec) << toString(Exec.takeError());
-  auto Err = (*Exec)->execute(
-      newFrontendActionFactory<clang::tidy::nullability::Action>(),
+  return executeFromCommandLineArgs(argc, argv, {
+      clang::tidy::nullability::run,
       // Disable warnings, testcases are full of unused expressions etc.
-      getInsertArgumentAdjuster("-w", ArgumentInsertPosition::BEGIN));
-  QCHECK(!Err) << toString(std::move(Err));
+      getInsertArgumentAdjuster("-w", ArgumentInsertPosition::BEGIN});
 }
